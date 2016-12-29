@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 )
 
@@ -75,36 +77,33 @@ func (c *Client) request(method, url string, body interface{}) (res []byte, err 
 }
 
 // upload voice file
-func (c *Client) upload(method, url, filepath, contentType string) (res []byte, err error) {
-	var data []byte
-	if data, err = ioutil.ReadFile(filepath); err == nil {
-		if c.Verbose {
-			log.Printf("< HTTP request: %s %s, %s (%s)\n", method, url, filepath, contentType)
-		}
+func (c *Client) upload(method, url string, body io.Reader, contentType string) (res []byte, err error) {
+	if c.Verbose {
+		log.Printf("< HTTP request: %s %s (%s)\n", method, url, contentType)
+	}
 
-		var req *http.Request
-		if req, err = http.NewRequest(method, url, bytes.NewBuffer(data)); err == nil {
-			// headers
-			req.Header.Set("Authorization", *c.headerAuth)
-			req.Header.Set("Accept", *c.headerAccept)
-			req.Header.Set("Content-Type", contentType)
+	var req *http.Request
+	if req, err = http.NewRequest(method, url, body); err == nil {
+		// headers
+		req.Header.Set("Authorization", *c.headerAuth)
+		req.Header.Set("Accept", *c.headerAccept)
+		req.Header.Set("Content-Type", contentType)
 
-			var resp *http.Response
-			client := &http.Client{}
-			if resp, err = client.Do(req); err == nil {
-				defer resp.Body.Close()
+		var resp *http.Response
+		client := &http.Client{}
+		if resp, err = client.Do(req); err == nil {
+			defer resp.Body.Close()
 
-				res, _ = ioutil.ReadAll(resp.Body)
+			res, _ = ioutil.ReadAll(resp.Body)
 
-				if c.Verbose {
-					log.Printf("> HTTP response: %s\n", string(res))
-				}
-			} else {
-				log.Printf("Error while sending request: %s\n", err.Error())
+			if c.Verbose {
+				log.Printf("> HTTP response: %s\n", string(res))
 			}
 		} else {
-			log.Printf("Error while building request: %s\n", err.Error())
+			log.Printf("Error while sending request: %s\n", err.Error())
 		}
+	} else {
+		log.Printf("Error while building request: %s\n", err.Error())
 	}
 
 	return res, err
@@ -169,6 +168,18 @@ func (c *Client) QueryMessage(query string, context interface{}, messageId, thre
 //
 // https://wit.ai/docs/http/20160516#post--speech-link
 func (c *Client) QuerySpeechMp3(filepath string, context interface{}, messageId, threadId string, n int) (response Message, err error) {
+	f, err := os.Open(filepath)
+	if err != nil {
+		return response, err
+	}
+	defer f.Close()
+
+	response, err = c.QuerySpeechMp3Reader(f, context, messageId, threadId, n)
+
+	return response, err
+}
+
+func (c *Client) QuerySpeechMp3Reader(file io.Reader, context interface{}, messageId, threadId string, n int) (response Message, err error) {
 	params := map[string]interface{}{}
 	if context != nil {
 		params["context"] = context
@@ -187,7 +198,7 @@ func (c *Client) QuerySpeechMp3(filepath string, context interface{}, messageId,
 	url := c.makeUrl("https://api.wit.ai/speech", params)
 
 	var bytes []byte
-	if bytes, err = c.upload("POST", *url, filepath, "audio/mpeg3"); err == nil {
+	if bytes, err = c.upload("POST", *url, file, "audio/mpeg3"); err == nil {
 		var speechRes Message
 		if err = json.Unmarshal(bytes, &speechRes); err == nil {
 			if !speechRes.HasError() {
